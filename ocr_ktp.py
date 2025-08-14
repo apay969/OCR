@@ -347,7 +347,7 @@ class KTPExtractor:
     }
 
     def preprocess_image(self, image):
-        """Preprocessing khusus untuk bagian atas KTP dengan noise reduction"""
+        """Preprocessing khusus untuk bagian atas KTP dengan noise reduction dan kontras enhancement"""
         img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
         # Convert to grayscale
@@ -383,7 +383,7 @@ class KTPExtractor:
         except:
             pass
         
-        # 4. Contrast enhancement khusus untuk text
+        # 4. CLAHE - Contrast enhancement khusus untuk text
         try:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
@@ -412,6 +412,108 @@ class KTPExtractor:
             
             _, otsu_top = cv2.threshold(top_region, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             processed_images.append(otsu_top)
+        except:
+            pass
+        
+        
+        # 7. Histogram Equalization untuk kontras global
+        try:
+            hist_eq = cv2.equalizeHist(gray)
+            processed_images.append(hist_eq)
+            
+            hist_eq_top = cv2.equalizeHist(top_region)
+            processed_images.append(hist_eq_top)
+        except:
+            pass
+        
+        # 8. Contrast Stretching untuk maksimalkan range dinamis
+        try:
+            # Stretch kontras ke range penuh 0-255
+            min_val, max_val = np.min(gray), np.max(gray)
+            if max_val != min_val:
+                stretched = ((gray - min_val) / (max_val - min_val)) * 255
+                stretched = stretched.astype(np.uint8)
+                processed_images.append(stretched)
+                
+                # Stretch untuk top region
+                min_val_top, max_val_top = np.min(top_region), np.max(top_region)
+                if max_val_top != min_val_top:
+                    stretched_top = ((top_region - min_val_top) / (max_val_top - min_val_top)) * 255
+                    stretched_top = stretched_top.astype(np.uint8)
+                    processed_images.append(stretched_top)
+        except:
+            pass
+        
+        # 9. Gamma Correction untuk brightening teks
+        try:
+            # Gamma < 1 untuk mencerahkan area gelap (teks)
+            gamma = 0.8
+            inv_gamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+            gamma_corrected = cv2.LUT(gray, table)
+            processed_images.append(gamma_corrected)
+            
+            gamma_corrected_top = cv2.LUT(top_region, table)
+            processed_images.append(gamma_corrected_top)
+        except:
+            pass
+        
+        # 10. Unsharp Masking untuk ketajaman teks
+        try:
+            # Gaussian blur
+            blurred = cv2.GaussianBlur(gray, (3, 3), 1.0)
+            # Unsharp mask
+            unsharp = cv2.addWeighted(gray, 1.5, blurred, -0.5, 0)
+            processed_images.append(unsharp)
+            
+            # Unsharp untuk top region
+            blurred_top = cv2.GaussianBlur(top_region, (3, 3), 1.0)
+            unsharp_top = cv2.addWeighted(top_region, 1.5, blurred_top, -0.5, 0)
+            processed_images.append(unsharp_top)
+        except:
+            pass
+        
+        # 11. Kombinasi terbaik: CLAHE + Gamma + Unsharp
+        try:
+            # Step 1: CLAHE dengan parameter yang sama seperti #4
+            clahe_combo = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            combo = clahe_combo.apply(gray)
+            
+            # Step 2: Gamma correction
+            gamma = 0.8
+            inv_gamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+            combo = cv2.LUT(combo, table)
+            
+            # Step 3: Unsharp masking
+            blurred = cv2.GaussianBlur(combo, (3, 3), 1.0)
+            combo = cv2.addWeighted(combo, 1.3, blurred, -0.3, 0)
+            
+            processed_images.append(combo)
+            
+            # Combo untuk top region
+            combo_top = clahe_combo.apply(top_region)
+            combo_top = cv2.LUT(combo_top, table)
+            blurred_top = cv2.GaussianBlur(combo_top, (3, 3), 1.0)
+            combo_top = cv2.addWeighted(combo_top, 1.3, blurred_top, -0.3, 0)
+            processed_images.append(combo_top)
+            
+        except:
+            pass
+        
+        # 12. Edge enhancement untuk teks yang lebih sharp
+        try:
+            # Laplacian edge detection dan combine dengan original
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            laplacian = np.uint8(np.absolute(laplacian))
+            edge_enhanced = cv2.add(gray, laplacian)
+            processed_images.append(edge_enhanced)
+            
+            # Edge enhancement untuk top region
+            laplacian_top = cv2.Laplacian(top_region, cv2.CV_64F)
+            laplacian_top = np.uint8(np.absolute(laplacian_top))
+            edge_enhanced_top = cv2.add(top_region, laplacian_top)
+            processed_images.append(edge_enhanced_top)
         except:
             pass
         
