@@ -217,6 +217,128 @@ class ImageCropper:
         cropped = image.crop((x_start, y_start, x_end, y_end))
         
         return cropped
+class EnhancedKTPPreprocessor:
+    """Enhanced preprocessing untuk KTP dengan security pattern dan noise tinggi"""
+    
+    def __init__(self):
+        pass
+    
+    def remove_security_patterns(self, image):
+        """Menghilangkan pola keamanan/watermark pada KTP"""
+        # Convert PIL to OpenCV format
+        img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 1. Median filter untuk mengurangi noise grain
+        denoised = cv2.medianBlur(gray, 3)
+        
+        # 2. Morphological opening untuk menghilangkan pola kecil
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        opened = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
+        
+        # 3. Gaussian blur untuk meratakan background noise
+        blurred = cv2.GaussianBlur(opened, (3, 3), 0.5)
+        
+        return blurred
+    
+    def enhance_text_contrast(self, gray_image):
+        """Meningkatkan kontras khusus untuk teks"""
+        # 1. CLAHE dengan parameter yang lebih agresif
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray_image)
+        
+        # 2. Histogram stretching
+        min_val, max_val = np.percentile(enhanced, [2, 98])  # Ignore extreme outliers
+        if max_val > min_val:
+            stretched = np.clip((enhanced - min_val) * 255 / (max_val - min_val), 0, 255)
+            enhanced = stretched.astype(np.uint8)
+        
+        # 3. Gamma correction untuk mencerahkan teks
+        gamma = 0.7  # Lebih agresif untuk teks gelap
+        inv_gamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        enhanced = cv2.LUT(enhanced, table)
+        
+        return enhanced
+    
+    def advanced_thresholding(self, gray_image):
+        """Thresholding yang lebih canggih untuk KTP dengan noise"""
+        results = []
+        
+        # 1. Adaptive Gaussian dengan parameter yang disesuaikan untuk noise
+        adaptive_gauss = cv2.adaptiveThreshold(
+            gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 21, 8  # Block size lebih besar untuk noise
+        )
+        results.append(adaptive_gauss)
+        
+        # 2. Adaptive Mean threshold
+        adaptive_mean = cv2.adaptiveThreshold(
+            gray_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, 
+            cv2.THRESH_BINARY, 19, 6
+        )
+        results.append(adaptive_mean)
+        
+        # 3. Otsu dengan Gaussian blur preprocessing
+        blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
+        _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        results.append(otsu)
+        
+        # 4. Kombinasi CLAHE + Otsu
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe_img = clahe.apply(gray_image)
+        _, clahe_otsu = cv2.threshold(clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        results.append(clahe_otsu)
+        
+        return results
+    
+    def preprocess_ktp_enhanced(self, image):
+        """Pipeline preprocessing yang dioptimalkan untuk KTP dengan security pattern"""
+        processed_images = []
+        
+        # Step 1: Remove security patterns and noise
+        clean_gray = self.remove_security_patterns(image)
+        processed_images.append(clean_gray)
+        
+        # Step 2: Enhance text contrast
+        enhanced = self.enhance_text_contrast(clean_gray)
+        processed_images.append(enhanced)
+        
+        # Step 3: Focus on upper region (lebih penting untuk KTP)
+        height, width = enhanced.shape
+        upper_region = enhanced[:int(height * 0.75), :]  # 75% bagian atas
+        processed_images.append(upper_region)
+        
+        # Step 4: Advanced thresholding
+        threshold_results = self.advanced_thresholding(enhanced)
+        processed_images.extend(threshold_results)
+        
+        # Step 5: Threshold untuk upper region
+        upper_threshold_results = self.advanced_thresholding(upper_region)
+        processed_images.extend(upper_threshold_results)
+        
+        # Step 6: Edge enhancement untuk teks yang blur
+        try:
+            # Unsharp masking yang lebih agresif
+            gaussian = cv2.GaussianBlur(enhanced, (5, 5), 2.0)
+            unsharp = cv2.addWeighted(enhanced, 2.0, gaussian, -1.0, 0)
+            unsharp = np.clip(unsharp, 0, 255).astype(np.uint8)
+            processed_images.append(unsharp)
+        except:
+            pass
+        
+        # Step 7: Bilateral filter untuk noise reduction sambil preserve edges
+        try:
+            bilateral = cv2.bilateralFilter(enhanced, 9, 80, 80)
+            processed_images.append(bilateral)
+            
+            # Bilateral + threshold
+            bilateral_thresh = self.advanced_thresholding(bilateral)
+            processed_images.extend(bilateral_thresh[:2])  # Ambil 2 yang terbaik
+        except:
+            pass
+        
+        return processed_images
 
 class KTPExtractor:
     
@@ -230,121 +352,65 @@ class KTPExtractor:
         
         # Patterns yang diperbaiki untuk ekstraksi data KTP Indonesia
         self.patterns = {
-        
-        "Provinsi": [
-            r'PROVINSI\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KABUPATEN|KAB|$)',
-            r'PROV\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KABUPATEN|KAB|$)',
-            r'(?:^|\n)\s*([A-Z][A-Z\s]{5,30})\s*(?=\n.*KABUPATEN|\n.*KAB)'
-        ],
-        "Kabupaten": [
-            r'KABUPATEN\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|NIK|$)',
-            r'KAB\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|NIK|$)',
-            r'KOTA\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|NIK|$)'
-        ],
-        
-        # IMPROVED NIK PATTERNS
-        "NIK": [
-            r'NIK\s*:?\s*(\d{16})(?=\s|$|\n)',  # NIK harus diikuti spasi/akhir/newline
-            r'(?:^|\n)NIK\s*:?\s*(\d{16})(?=\s|$|\n)',  # NIK di awal baris
-            r'NOMOR\s*INDUK\s*KEPENDUDUKAN\s*:?\s*(\d{16})(?=\s|$|\n)',
-            r'(?:^|\n)\s*(\d{16})(?=\s*$|\s*\n[A-Z])',  # 16 digit diikuti nama (huruf kapital)
-        ],
-        
-        "Nama": [
-            r'NAMA\s*:?\s*([A-Z][A-Z\s]{2,40})(?=\n|TEMPAT|Tempat)',
-            r'Nama\s*:?\s*([A-Z][A-Z\s]{2,40})(?=\n|TEMPAT|Tempat)',
-            r'(?:NIK.*\n)?\s*([A-Z][A-Z\s]{5,40})(?=\n.*TEMPAT|\n.*Tempat)'
-        ],
-        "Tempat Tgl Lahir": [
-            r'TEMPAT\s*TGL\s*LAHIR\s*:?\s*([A-Z][A-Z\s,]{2,25}[,\s]+\d{1,2}[\-\/]\d{1,2}[\-\/]\d{4})',
-            r'Tempat\s*Tgl\s*Lahir\s*:?\s*([A-Z][A-Z\s,]{2,25}[,\s]+\d{1,2}[\-\/]\d{1,2}[\-\/]\d{4})',
-            r'TEMPAT.*LAHIR\s*:?\s*([A-Z][A-Z\s,]{2,25}[,\s]+\d{1,2}[\-\/]\d{1,2}[\-\/]\d{4})'
-        ],
-        "Jenis Kelamin": [
-            r'JENIS\s*KELAMIN\s*:?\s*(LAKI[\-\s]*LAKI|PEREMPUAN)',
-            r'Jenis\s*Kelamin\s*:?\s*(LAKI[\-\s]*LAKI|PEREMPUAN)',
-            r'JNS\s*KEL\s*:?\s*(L|P)'
-        ],
-        
-        # IMPROVED GOL DARAH PATTERNS
-        "Gol Darah": [
-            r'GOL\.?\s*DARAH\s*:?\s*([ABCO][\+\-]?)',  # Standard format with optional dot
-            r'Gol\.?\s*Darah\s*:?\s*([ABCO][\+\-]?)',  # Mixed case
-            r'GD\s*:?\s*([ABCO][\+\-]?)',  # Abbreviated
-            r'G[O0]L[\.\s]*DARAH\s*:?\s*([ABCO][\+\-]?)',  # Handle O/0 confusion
-            r'GOLONGAN\s*DARAH\s*:?\s*([ABCO][\+\-]?)',  # Full text
-            r'(?:GOL|GD|GOLONGAN)[\s\.]DARAH\s*[\s:\.]*([ABCO][\+\-]?)',  # Flexible separator
-            r'DARAH\s*:?\s*([ABCO][\+\-]?)',  # Just "DARAH :"
-            r'(?<=\s|:)([ABCO])[\+\-]?(?=\s|$)',  # Standalone blood type
-            r'([ABCO][\+\-]?)(?=\s*\n.*ALAMAT|$)'  # Blood type before address
-        ],
-        
-        "Alamat": [
-            r'ALAMAT\s*:?\s*([A-Z0-9][A-Z0-9\s\/\.]{5,50})(?=\n|RT|Rt)',
-            r'Alamat\s*:?\s*([A-Z0-9][A-Z0-9\s\/\.]{5,50})(?=\n|RT|Rt)',
-            r'JALAN\s*:?\s*([A-Z0-9][A-Z0-9\s\/\.]{5,50})(?=\n|RT|Rt)'
-        ],
-        
-        # IMPROVED RT RW PATTERNS
-        "RT RW": [
-            r'RT[\s\/]RW\s*:?\s*(\d{1,3})[\s\/\-]+(\d{1,3})',  # Format RT/RW: 001/002
-            r'RT\s*:?\s*(\d{1,3})[\s\/\-]*RW\s*:?\s*(\d{1,3})',  # RT: 001 RW: 002
-            r'RT\s*(\d{1,3})\s*[\/\-]\s*RW\s*(\d{1,3})',  # RT 001/RW 002
-            r'RT\s*(\d{1,3})\s*RW\s*(\d{1,3})',  # RT 001 RW 002
-            # Pattern dengan format angka/angka
-            r'(\d{1,3})[\s]*\/[\s]*(\d{1,3})(?=\s*(?:\n|KEL|DESA|Kel|Desa))',
-            r'(\d{1,3})[\s]*\-[\s]*(\d{1,3})(?=\s*(?:\n|KEL|DESA|Kel|Desa))',
-            # Pattern dengan konteks alamat
-            r'(?:ALAMAT.*?)(\d{1,3})[\s\/\-]+(\d{1,3})(?=.*(?:KEL|DESA))',  # 001/002 sebelum kelurahan
-            r'(?:RT|Rt)\s*(\d{1,3})\s*(?:RW|Rw)\s*(\d{1,3})',
-            # Pattern untuk menangkap RT/RW setelah alamat
-            r'(?:ALAMAT.*\n.*\n)?\s*(\d{1,3})[\s\/\-](\d{1,3})(?=\s*\n)',
-        ],
-        
-        "Kel Desa": [
-            r'KEL[\s\/]DESA\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KECAMATAN|Kecamatan)',
-            r'Kel[\s\/]Desa\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KECAMATAN|Kecamatan)',
-            r'KELURAHAN\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KECAMATAN|Kecamatan)',
-            r'DESA\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|KECAMATAN|Kecamatan)'
-        ],
-        "Kecamatan": [
-            r'KECAMATAN\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|AGAMA|Agama)',
-            r'Kecamatan\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|AGAMA|Agama)',
-            r'KEC\s*:?\s*([A-Z][A-Z\s]{3,30})(?=\n|AGAMA|Agama)'
-        ],
-        "Agama": [
-            r'AGAMA\s*:?\s*(ISLAM|KRISTEN|KATOLIK|HINDU|BUDDHA|KONGHUCU)(?=\n|STATUS|Status)',
-            r'Agama\s*:?\s*(ISLAM|KRISTEN|KATOLIK|HINDU|BUDDHA|KONGHUCU)(?=\n|STATUS|Status)'
-        ],
-        
-        # IMPROVED STATUS PERKAWINAN PATTERNS
-        "Status Perkawinan": [
-            r'STATUS\s*PERKAWINAN\s*:?\s*(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
-            r'Status\s*Perkawinan\s*:?\s*(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
-            r'STATUS\s*KAWIN\s*:?\s*(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
-            r'PERKAWINAN\s*:?\s*(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
-            r'(?:STATUS|PERKAWINAN)[\s]*:[\s]*(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
-            r'(BELUM\s*(?:KAWIN|MENIKAH)|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)(?=\s*\n.*PEKERJAAN)',
-            r'(?<=STATUS[\s:])(\S.*?)(?=\s*\n.*PEKERJAAN)'  # More flexible matching
-        ],
-        
-        "Pekerjaan": [
-            r'PEKERJAAN\s*:?\s*([A-Z][A-Z\s\/]{3,30})(?=\n|KEWARGANEGARAAN|Kewarganegaraan)',
-            r'Pekerjaan\s*:?\s*([A-Z][A-Z\s\/]{3,30})(?=\n|KEWARGANEGARAAN|Kewarganegaraan)'
-        ],
-        
-        # IMPROVED KEWARGANEGARAAN PATTERNS
-        "Kewarganegaraan": [
-            r'KEWARGANEGARAAN\s*:?\s*(WN[I1]|WNA)',  # Handle I/1 confusion
-            r'Kewarganegaraan\s*:?\s*(WN[I1]|WNA)',
-            r'KEW\s*:?\s*(WN[I1]|WNA)',  # Abbreviated
-            r'WNI|WNA(?=\s*\n|$)',  # Standalone
-            r'WARGA\s*NEGARA\s*:?\s*(INDONESIA|ASING)',  # Full text
-            r'(?:KEWARGANEGARAAN|WRG[\s]*NEGARA)[\s:\.](\S.*?)(?=\s*\n.*BERLAKU|$)',
-            r'(WN[I1A])(?=\s*\n.*BERLAKU|\s*$)',  # Before validity
-            r'(?<=KEWARGANEGARAAN[\s:])(.+?)(?=\s*\n)'  # Everything after label
-        ]
-    }
+    "Provinsi": [
+        r'PROVINSI\s+([A-Z\s]{3,40})(?=\n|KOTA|KABUPATEN|$)',
+    ],
+    "Kabupaten": [
+        r'KOTA\s+([A-Z\s]{3,40})(?=\n|NIK|$)',
+        r'KABUPATEN\s+([A-Z\s]{3,40})(?=\n|NIK|$)',
+    ],
+    "NIK": [
+    # Matches 'NIK' + optional colon/dash + exactly 16 digits
+    r'NIK\s*[:\-]?\s*([0-9]{16})(?=\s|\n|$)'
+],
+
+
+    "Nama": [
+        r'NAMA\s*[:\-]?\s*([A-Z\s]+?)(?=\n|TEMPAT|Tempat|TGL|LAHIR|JENIS)'  # extended stop words
+    ],
+    "Tempat Tgl Lahir": [
+        r'TEMPAT\/TGL\s*LAHIR\s*:?\s*([A-Z\s]+,\s*\d{2}[\-\/]\d{2}[\-\/]\d{4})',
+        r'Tempat\/Tgl\s*Lahir\s*:?\s*([A-Z\s]+,\s*\d{2}[\-\/]\d{2}[\-\/]\d{4})',
+    ],
+    "Jenis Kelamin": [
+        r'JENIS\s*KELAMIN\s*:?\s*(LAKI[\-\s]*LAKI|PEREMPUAN)',
+        r'Jenis\s*Kelamin\s*:?\s*(LAKI[\-\s]*LAKI|PEREMPUAN)',
+    ],
+    "Gol Darah": [
+        r'GOL\.?\s*DARAH\s*:?\s*([ABO]{1,2}[+\-]?)',
+    ],
+    "Alamat": [
+        r'ALAMAT\s*[:\-]?\s*([A-Z0-9\s\/\.\-]+?)(?=\n|RT|Rw|RW|KEL|KEL\/DESA|DESA|KEC|AGAMA|PEKERJAAN)'
+    ],
+    "RT RW": [
+        r'RT\s*[:\-]?\s*0*([0-9]{1,3})\s*[\/\-]\s*RW\s*[:\-]?\s*0*([0-9]{1,3})',
+        r'RT\s*[:\-]?\s*0*([0-9]{1,3})\s*RW\s*[:\-]?\s*0*([0-9]{1,3})'
+    ],
+    "Kel Desa": [
+        r'KEL\/DESA\s*[:\-]?\s*([A-Z\s]+?)(?=\n|KECAMATAN|KEC|AGAMA|PEKERJAAN)',
+        r'KELURAHAN\s*[:\-]?\s*([A-Z\s]+?)(?=\n|KECAMATAN|KEC|AGAMA|PEKERJAAN)',
+        r'DESA\s*[:\-]?\s*([A-Z\s]+?)(?=\n|KECAMATAN|KEC|AGAMA|PEKERJAAN)'
+    ],
+    "Kecamatan": [
+        r'KEC(?:AMATAN)?\s*[:\-]?\s*([A-Z\s]+?)(?=\n|AGAMA|PEKERJAAN|STATUS|Kewarganegaraan)'
+    ],
+    "Agama": [
+        r'AGAMA\s*[:\-]?\s*(ISLAM|KRISTEN|KATOLIK|HINDU|BUDDHA|KONGHUCU)'
+    ],
+    "Status Perkawinan": [
+        r'STATUS\s*PERKAWINAN\s*:?\s*(BELUM\s*KAWIN|KAWIN|MENIKAH|CERAI\s*HIDUP|CERAI\s*MATI)',
+    ],
+    "Pekerjaan": [
+        r'PEKERJAAN\s*[:\-]?\s*([A-Z\s\/\.]+?)(?=\n|STATUS|KEWARGANEGARAAN|BERLAKU)'
+    ],
+    "Kewarganegaraan": [
+        r'KEWARGANEGARAAN\s*:?\s*(WNI|WNA)',
+    ],
+    "Berlaku Hingga": [
+        r'BERLAKU\s*HINGGA\s*:?\s*([A-Z\s]+)',
+    ]
+}
+
 
     def preprocess_image(self, image):
         """Preprocessing khusus untuk bagian atas KTP dengan noise reduction dan kontras enhancement"""
