@@ -1,6 +1,6 @@
 """
 Enhanced Image Handler - Menangani loading dan preprocessing gambar untuk OCR yang lebih akurat
-Versi sederhana yang fokus pada perbaikan masalah OCR
+Versi sederhana yang fokus pada perbaikan masalah OCR dengan penyempurnaan kecil
 """
 import logging
 import cv2
@@ -174,9 +174,9 @@ class ImageHandler:
             self.logger.error(f"Error rotasi gambar: {str(e)}")
             return image
     
-    def enhance_contrast_simple(self, image):
+    def enhance_contrast_adaptive(self, image):
         """
-        Simple contrast enhancement yang reliable
+        Adaptive contrast enhancement yang lebih baik untuk teks
         
         Args:
             image (numpy.ndarray): Grayscale image
@@ -185,19 +185,68 @@ class ImageHandler:
             numpy.ndarray: Enhanced image
         """
         try:
-            # CLAHE (Contrast Limited Adaptive Histogram Equalization)
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            # CLAHE dengan parameter optimal untuk teks
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
             enhanced = clahe.apply(image)
             
-            return enhanced
+            # Gamma correction yang lebih halus
+            gamma = 1.1
+            gamma_corrected = np.power(enhanced / 255.0, gamma) * 255.0
+            gamma_corrected = np.clip(gamma_corrected, 0, 255).astype(np.uint8)
+            
+            return gamma_corrected
             
         except Exception as e:
             self.logger.error(f"Error enhance contrast: {str(e)}")
             return image
     
+    def reduce_noise_advanced(self, image):
+        """
+        Noise reduction yang lebih canggih untuk preservasi karakter
+        
+        Args:
+            image (numpy.ndarray): Grayscale image
+            
+        Returns:
+            numpy.ndarray: Denoised image
+        """
+        try:
+            # Bilateral filter dengan parameter yang lebih halus
+            denoised = cv2.bilateralFilter(image, 7, 50, 50)
+            
+            return denoised
+            
+        except Exception as e:
+            self.logger.error(f"Error reduce noise: {str(e)}")
+            return image
+    
+    def sharpen_text(self, image):
+        """
+        Text sharpening yang lebih targeted untuk karakter
+        
+        Args:
+            image (numpy.ndarray): Grayscale image
+            
+        Returns:
+            numpy.ndarray: Sharpened image
+        """
+        try:
+            # Unsharp mask untuk meningkatkan ketajaman teks
+            blurred = cv2.GaussianBlur(image, (0, 0), 1.0)
+            sharpened = cv2.addWeighted(image, 1.5, blurred, -0.5, 0)
+            
+            # Clamp values
+            sharpened = np.clip(sharpened, 0, 255).astype(np.uint8)
+            
+            return sharpened
+            
+        except Exception as e:
+            self.logger.error(f"Error sharpen text: {str(e)}")
+            return image
+    
     def preprocess_image(self, image, enhance_text=True, auto_rotate=True):
         """
-        Preprocessing sederhana tapi efektif untuk OCR
+        Preprocessing yang disempurnakan untuk OCR yang lebih akurat
         
         Args:
             image (numpy.ndarray): Image array
@@ -220,34 +269,36 @@ class ImageHandler:
             else:
                 gray = image.copy()
             
-            # Resize jika gambar terlalu kecil
+            # Resize jika gambar terlalu kecil - optimal size
             height, width = gray.shape
-            min_size = 800  # Minimum size untuk OCR yang baik
+            min_size = 900  # Sweet spot untuk OCR
             
             if height < min_size or width < min_size:
                 scale = max(min_size/height, min_size/width)
+                # Batasi scale untuk hasil optimal
+                scale = min(scale, 2.0)
                 new_width = int(width * scale)
                 new_height = int(height * scale)
                 gray = cv2.resize(gray, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
                 self.logger.info(f"Gambar di-resize ke: {new_width}x{new_height}")
             
-            # Simple noise reduction
-            gray = cv2.medianBlur(gray, 3)
-            
             if enhance_text:
-                # Simple contrast enhancement
-                gray = self.enhance_contrast_simple(gray)
+                # Advanced noise reduction
+                gray = self.reduce_noise_advanced(gray)
                 
-                # Simple sharpening
-                kernel = np.array([[0, -1, 0],
-                                  [-1, 5, -1],
-                                  [0, -1, 0]])
-                gray = cv2.filter2D(gray, -1, kernel)
+                # Adaptive contrast enhancement
+                gray = self.enhance_contrast_adaptive(gray)
+                
+                # Text sharpening
+                gray = self.sharpen_text(gray)
+            else:
+                # Minimal noise reduction jika tidak enhance
+                gray = cv2.medianBlur(gray, 3)
             
-            # Clamp values
+            # Final clamp
             gray = np.clip(gray, 0, 255).astype(np.uint8)
             
-            self.logger.info("Simple preprocessing selesai")
+            self.logger.info("Enhanced preprocessing selesai")
             return gray
             
         except Exception as e:
@@ -257,7 +308,7 @@ class ImageHandler:
     def preprocess_for_ocr_clean(self, image):
         """
         Preprocessing khusus untuk mendapatkan teks yang bersih
-        Fokus pada binary threshold untuk OCR yang lebih akurat
+        Fokus pada binary threshold untuk OCR yang lebih akurat dengan penyempurnaan
         
         Args:
             image (numpy.ndarray): Image array
@@ -272,26 +323,27 @@ class ImageHandler:
             else:
                 gray = image.copy()
             
-            # Resize untuk kualitas OCR
+            # Resize untuk kualitas OCR yang optimal
             height, width = gray.shape
-            if height < 800 or width < 800:
-                scale = max(800/height, 800/width)
+            if height < 900 or width < 900:
+                scale = max(900/height, 900/width)
+                scale = min(scale, 1.8)  # Moderate scaling
                 new_width = int(width * scale)
                 new_height = int(height * scale)
                 gray = cv2.resize(gray, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
             
-            # Noise reduction ringan
-            gray = cv2.bilateralFilter(gray, 9, 75, 75)
+            # Noise reduction yang balanced
+            gray = cv2.bilateralFilter(gray, 9, 60, 60)
             
-            # Adaptive threshold untuk hasil yang bersih
+            # Adaptive threshold dengan parameter yang fine-tuned
             binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
+                                         cv2.THRESH_BINARY, 9, 3)
             
-            # Small noise removal
-            kernel = np.ones((2,2), np.uint8)
+            # Morphological cleaning yang minimal tapi efektif
+            kernel = np.ones((1,1), np.uint8)
             binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
             
+            self.logger.info("Clean OCR preprocessing selesai")
             return binary
             
         except Exception as e:
@@ -300,7 +352,7 @@ class ImageHandler:
     
     def get_image_quality_score(self, image):
         """
-        Sederhana quality assessment
+        Enhanced quality assessment
         
         Args:
             image (numpy.ndarray): Image array
@@ -314,10 +366,10 @@ class ImageHandler:
             else:
                 gray = image
             
-            # Blur detection
+            # Blur detection - lebih sensitif
             blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
             
-            # Contrast
+            # Contrast - standard deviation
             contrast_score = gray.std()
             
             # Brightness
@@ -326,17 +378,28 @@ class ImageHandler:
             # Resolution
             resolution_score = gray.shape[0] * gray.shape[1]
             
-            is_low_quality = blur_score < 100 or contrast_score < 50
+            # Text clarity check - gradient magnitude
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            edge_magnitude = np.sqrt(sobelx**2 + sobely**2)
+            text_clarity = edge_magnitude.mean()
+            
+            # Improved quality assessment
+            is_low_quality = (blur_score < 150 or 
+                             contrast_score < 40 or 
+                             text_clarity < 20 or
+                             resolution_score < 400000)  # < 800x500
             
             metrics = {
                 'blur_score': blur_score,
                 'contrast_score': contrast_score,
                 'brightness_score': brightness_score,
                 'resolution_score': resolution_score,
+                'text_clarity': text_clarity,
                 'is_low_quality': is_low_quality
             }
             
-            self.logger.info(f"Quality metrics: blur={blur_score:.1f}, contrast={contrast_score:.1f}")
+            self.logger.info(f"Quality metrics: blur={blur_score:.1f}, contrast={contrast_score:.1f}, clarity={text_clarity:.1f}")
             return metrics
             
         except Exception as e:
