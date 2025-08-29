@@ -83,47 +83,57 @@ class TextProcessor:
             return text
     
     def _fix_common_ocr_errors(self, text):
-        """
-        Perbaiki kesalahan OCR yang umum terjadi
-        
-        Args:
-            text (str): Input text
-            
-        Returns:
-            str: Corrected text
-        """
-        try:
-            # Common OCR character mistakes
-            corrections = {
-                # Numbers and letters
-                '0': ['O', 'o'],
-                '1': ['l', 'I', '|'],
-                '5': ['S'],
-                '6': ['G'],
-                '8': ['B'],
+            """
+            Perbaiki kesalahan OCR yang umum terjadi (huruf/angka + kata umum di KTP)
+            """
+            try:
+                original_text = text  # Simpan untuk logging
                 
-                # Letters
-                'O': ['0'],
-                'I': ['1', '|'],
-                'l': ['1', 'I'],
-                'S': ['5'],
-                'G': ['6'],
-                'B': ['8'],
-                
-                # Special characters
-                '"': ['"', '"'],
-                "'": [''', '''],
-            }
-            
-            # Apply corrections contextually
-            corrected_text = text
-            
-            # Fix spacing around punctuation
-            corrected_text = re.sub(r'\s+([.,:;!?])', r'\1', corrected_text)
-            corrected_text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', corrected_text)
-            
-            return corrected_text
-            
-        except Exception as e:
-            self.logger.error(f"Error fixing OCR errors: {str(e)}")
-            return text
+                # Lowercase untuk memudahkan pencocokan kata
+                text_lower = text.lower()
+
+                # Kamus koreksi kata/kalimat umum di KTP
+                word_corrections = {
+                    r"jens kelam[ıi]n": "Jenis Kelamin",
+                    r"gol\s*dara[hıi]": "Golongan Darah",
+                    r"seumui hidup": "SEUMUR HIDUP",
+                    r"tompavtol lah[ıi]r": "Tempat/Tgl Lahir",
+                    r"nik+": "NIK",
+                    r"nama[ıi]": "Nama",
+                    r"provins[ıi]": "Provinsi",
+                    r"kabupatenn?": "Kabupaten",
+                    r"kecamatann?": "Kecamatan",
+                    r"desaa?": "Desa",
+                }
+
+                # Terapkan regex word corrections (case-insensitive)
+                for salah, benar in word_corrections.items():
+                    text_lower = re.sub(salah, benar, text_lower, flags=re.IGNORECASE)
+
+                # Perbaikan karakter umum OCR
+                char_corrections = {
+                    "0": ["O", "o"],
+                    "1": ["l", "I", "|"],
+                    "5": ["S"],
+                    "6": ["G"],
+                    "8": ["B"],
+                }
+
+                for benar, salah_list in char_corrections.items():
+                    for salah in salah_list:
+                        text_lower = text_lower.replace(salah, benar)
+
+                # Rapikan spasi dan tanda baca
+                text_lower = re.sub(r"\s+([.,:;!?])", r"\1", text_lower)
+                text_lower = re.sub(r"([.!?])\s*([A-Z])", r"\1 \2", text_lower)
+
+                # Logging hasil
+                self.logger.debug(f"Before cleaning: {original_text}")
+                self.logger.debug(f"After cleaning: {text_lower}")
+
+                return text_lower
+
+            except Exception as e:
+                self.logger.error(f"Error fixing OCR errors: {str(e)}")
+                return text
+
